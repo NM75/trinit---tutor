@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Trinité" />
+  <title>Trinité — Tuteur pour enfants</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧚</text></svg>" />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
+    html, body, #root { height: 100%; overflow: hidden; }
+    body { font-family: 'Nunito', sans-serif; }
+    input { font-size: 16px !important; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+    @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 6px rgba(239,68,68,0.2); } 50% { box-shadow: 0 0 0 14px rgba(239,68,68,0.1); } }
+  </style>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ─── CONFIG ───
+
+    const THEMES = [
+      { id: "animals", emoji: "🦁", label: "Les animaux", color: "#F59E0B", bg: "#FEF3C7" },
+      { id: "space", emoji: "🚀", label: "L'espace", color: "#6366F1", bg: "#EEF2FF" },
+      { id: "ocean", emoji: "🐙", label: "L'océan", color: "#0EA5E9", bg: "#E0F2FE" },
+      { id: "nature", emoji: "🌿", label: "La nature", color: "#22C55E", bg: "#DCFCE7" },
+      { id: "german", emoji: "🇩🇪", label: "L'allemand", color: "#DC2626", bg: "#FEE2E2" },
+      { id: "constructions", emoji: "🏗️", label: "Les constructions", color: "#D97706", bg: "#FEF3C7" },
+      { id: "planes", emoji: "✈️", label: "Les avions", color: "#0284C7", bg: "#E0F2FE" },
+      { id: "howthingswork", emoji: "⚙️", label: "Comment ça marche ?", color: "#7C3AED", bg: "#EDE9FE" },
+    ];
+
+    const QUIZ_COLORS = [
+      { color: "#EF4444", bg: "#FEE2E2", border: "#FCA5A5", label: "rouge" },
+      { color: "#22C55E", bg: "#DCFCE7", border: "#86EFAC", label: "vert" },
+      { color: "#3B82F6", bg: "#DBEAFE", border: "#93C5FD", label: "bleu" },
+    ];
+
+    // ─── STORAGE ───
+
+    const getStored = (key) => { try { return localStorage.getItem(key); } catch(e) { return null; } };
+    const setStored = (key, val) => { try { localStorage.setItem(key, val); } catch(e) {} };
+
+    // ─── Natural TTS ───
+
+    const speakQueue = { cancel: false };
+
+    const speakNatural = (text, onDone) => {
+      if (!("speechSynthesis" in window)) { onDone?.(); return; }
+      window.speechSynthesis.cancel();
+      speakQueue.cancel = false;
+      const sentences = text.replace(/([.!?…])\s+/g, "$1|||").split("|||").map(s => s.trim()).filter(s => s.length > 0);
+      const voices = window.speechSynthesis.getVoices();
+      const frVoice = voices.find(v => v.lang.startsWith("fr") && v.name.toLowerCase().includes("audrey"))
+        || voices.find(v => v.lang.startsWith("fr") && v.name.toLowerCase().includes("thomas"))
+        || voices.find(v => v.lang.startsWith("fr"));
+      let i = 0;
+      const speakNext = () => {
+        if (speakQueue.cancel || i >= sentences.length) { onDone?.(); return; }
+        const u = new SpeechSynthesisUtterance(sentences[i]);
+        u.lang = "fr-FR"; u.rate = 0.82; u.pitch = 1.05;
+        if (frVoice) u.voice = frVoice;
+        u.onend = () => { i++; setTimeout(speakNext, 350); };
+        u.onerror = () => { i++; speakNext(); };
+        window.speechSynthesis.speak(u);
+      };
+      speakNext();
+    };
+
+    const stopSpeaking = () => { speakQueue.cancel = true; window.speechSynthesis?.cancel(); };
+
+    // ─── Speech Recognition ───
+
+    const useSpeechRecognition = () => {
+      const [listening, setListening] = useState(false);
+      const [transcript, setTranscript] = useState("");
+      const [available, setAvailable] = useState(false);
+      const recognitionRef = useRef(null);
+
+      useEffect(() => { setAvailable(!!(window.SpeechRecognition || window.webkitSpeechRecognition)); }, []);
+
+      const startListening = useCallback(() => {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) return;
+        stopSpeaking();
+        try {
+          const r = new SR();
+          r.lang = "fr-FR"; r.continuous = false; r.interimResults = false;
+          r.onstart = () => setListening(true);
+          r.onresult = (e) => { setTranscript(e.results[0][0].transcript); setListening(false); };
+          r.onerror = () => setListening(false);
+          r.onend = () => setListening(false);
+          recognitionRef.current = r;
+          r.start();
+        } catch(e) { setAvailable(false); }
+      }, []);
+
+      const stopListening = useCallback(() => { recognitionRef.current?.stop(); setListening(false); }, []);
+      return { listening, transcript, startListening, stopListening, setTranscript, available };
+    };
+
+    // ─── API (via proxy) ───
+
+    const callClaude = async (messages, system, password, retries = 2) => {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 30000);
+          const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password, messages, system }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          if (!res.ok) {
+            if (res.status === 401) return "__WRONG_PASSWORD__";
+            if (attempt < retries) { await new Promise(r => setTimeout(r, 1500)); continue; }
+            throw new Error(`API ${res.status}`);
+          }
+          const data = await res.json();
+          const text = data.content?.find(b => b.type === "text")?.text;
+          if (text) return text;
+          if (attempt < retries) { await new Promise(r => setTimeout(r, 1500)); continue; }
+          throw new Error("Empty");
+        } catch(e) {
+          if (attempt >= retries) return null;
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      }
+      return null;
+    };
+
+    // ─── UI Components ───
+
+    const BigButton = ({ onClick, children, color, bg, style = {}, disabled = false }) => (
+      <button onClick={onClick} disabled={disabled} style={{
+        padding: "16px 28px", fontSize: 20, fontWeight: 700,
+        border: `3px solid ${color || "#6366F1"}`, borderRadius: 20,
+        background: bg || "#EEF2FF", color: color || "#6366F1",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1, transition: "all 0.2s",
+        fontFamily: "'Nunito', sans-serif",
+        WebkitTapHighlightColor: "transparent", ...style,
+      }}>{children}</button>
+    );
+
+    const LunaAvatar = ({ size = 80 }) => (
+      <div style={{
+        width: size, height: size, borderRadius: "50%",
+        background: "linear-gradient(135deg, #f0abfc 0%, #c026d3 100%)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: size * 0.5, boxShadow: "0 4px 20px rgba(192,38,211,0.3)", flexShrink: 0,
+      }}>🧚</div>
+    );
+
+    const ChatBubble = ({ text, isLuna = true }) => (
+      <div style={{
+        display: "flex", gap: 12, alignItems: "flex-start",
+        marginBottom: 14, flexDirection: isLuna ? "row" : "row-reverse",
+        animation: "fadeIn 0.4s ease",
+      }}>
+        {isLuna && <LunaAvatar size={44} />}
+        <div style={{
+          background: isLuna ? "#F3F0FF" : "#E0F2FE",
+          borderRadius: isLuna ? "4px 18px 18px 18px" : "18px 4px 18px 18px",
+          padding: "14px 18px", maxWidth: "80%",
+          fontSize: 18, lineHeight: 1.6, color: "#1e1b4b",
+          fontFamily: "'Nunito', sans-serif",
+        }}>{text}</div>
+        {!isLuna && <div style={{
+          width: 44, height: 44, borderRadius: "50%", background: "#E0F2FE",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 24, flexShrink: 0,
+        }}>🧒</div>}
+      </div>
+    );
+
+    const LoadingDots = () => (
+      <div style={{ display: "flex", gap: 8, padding: 20, justifyContent: "center" }}>
+        {[0, 1, 2].map(i => (
+          <div key={i} style={{
+            width: 12, height: 12, borderRadius: "50%", background: "#a78bfa",
+            animation: `bounce 1s ease-in-out ${i * 0.15}s infinite`,
+          }} />
+        ))}
+      </div>
+    );
+
+    const MicButton = ({ listening, onPress, size = 72 }) => (
+      <button onClick={onPress} style={{
+        width: size, height: size, borderRadius: "50%",
+        background: listening ? "linear-gradient(135deg, #EF4444 0%, #DC2626 100%)" : "linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)",
+        border: listening ? "4px solid #FCA5A5" : "4px solid #c4b5fd",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        cursor: "pointer", fontSize: size * 0.38,
+        boxShadow: listening ? "0 0 0 8px rgba(239,68,68,0.2)" : "0 4px 20px rgba(192,38,211,0.3)",
+        transition: "all 0.3s", animation: listening ? "pulse 1.5s ease-in-out infinite" : "none",
+        WebkitTapHighlightColor: "transparent",
+      }}>{listening ? "⏹️" : "🎤"}</button>
+    );
+
+    // ─── PASSWORD SCREEN ───
+
+    const PasswordScreen = ({ onSuccess }) => {
+      const [pw, setPw] = useState("");
+      const [error, setError] = useState(false);
+      const [checking, setChecking] = useState(false);
+
+      const check = async () => {
+        setChecking(true); setError(false);
+        const result = await callClaude(
+          [{ role: "user", content: "Dis juste: OK" }],
+          "Réponds uniquement OK.",
+          pw
+        );
+        setChecking(false);
+        if (result === "__WRONG_PASSWORD__") {
+          setError(true);
+        } else if (result) {
+          setStored("trinite_pw", pw);
+          onSuccess(pw);
+        } else {
+          setError(true);
+        }
+      };
+
+      return (
+        <div style={{
+          display: "flex", flexDirection: "column", alignItems: "center",
+          justifyContent: "center", height: "100%", gap: 24, padding: 40,
+          background: "linear-gradient(180deg, #f5f3ff 0%, #ede9fe 50%, #e0d4fc 100%)",
+        }}>
+          <LunaAvatar size={100} />
+          <h1 style={{ fontSize: 32, fontWeight: 800, color: "#4c1d95", fontFamily: "'Baloo 2', cursive", textAlign: "center" }}>
+            Trinité — Tuteur 🧚
+          </h1>
+          <p style={{ fontSize: 18, color: "#6b21a8", textAlign: "center" }}>
+            Entre le mot de passe pour commencer
+          </p>
+          <input
+            type="password"
+            value={pw}
+            onChange={e => setPw(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && check()}
+            placeholder="Mot de passe..."
+            style={{
+              padding: "14px 20px", fontSize: 18, borderRadius: 16,
+              border: error ? "3px solid #EF4444" : "3px solid #c4b5fd",
+              width: "100%", maxWidth: 300, textAlign: "center",
+              fontFamily: "'Nunito', sans-serif", outline: "none",
+            }}
+          />
+          {error && <p style={{ color: "#EF4444", fontWeight: 700 }}>Mot de passe incorrect</p>}
+          <BigButton onClick={check} color="#7c3aed" bg="#ede9fe" disabled={checking || !pw}>
+            {checking ? "Vérification..." : "Entrer"}
+          </BigButton>
+        </div>
+      );
+    };
+
+    // ─── SETUP SCREEN (children names) ───
+
+    const SetupScreen = ({ onDone }) => {
+      const stored = getStored("trinite_children");
+      const initial = stored ? JSON.parse(stored) : [{ name: "", age: "" }];
+      const [children, setChildren] = useState(initial);
+
+      const update = (idx, field, val) => {
+        const c = [...children];
+        c[idx] = { ...c[idx], [field]: val };
+        setChildren(c);
+      };
+
+      const addChild = () => setChildren(prev => [...prev, { name: "", age: "" }]);
+      const removeChild = (idx) => setChildren(prev => prev.filter((_, i) => i !== idx));
+
+      const save = () => {
+        const valid = children.filter(c => c.name.trim() && c.age);
+        if (valid.length === 0) return;
+        setStored("trinite_children", JSON.stringify(valid));
+        onDone(valid);
+      };
+
+      return (
+        <div style={{
+          display: "flex", flexDirection: "column", alignItems: "center",
+          justifyContent: "center", height: "100%", gap: 20, padding: 30,
+          background: "linear-gradient(180deg, #f5f3ff 0%, #ede9fe 50%, #e0d4fc 100%)",
+        }}>
+          <LunaAvatar size={80} />
+          <h2 style={{ fontSize: 26, fontWeight: 800, color: "#4c1d95", fontFamily: "'Baloo 2', cursive", textAlign: "center" }}>
+            Qui sont les enfants ?
+          </h2>
+          <p style={{ fontSize: 16, color: "#6b21a8", textAlign: "center" }}>
+            Ajoute les prénoms et âges (tu peux modifier plus tard)
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%", maxWidth: 360 }}>
+            {children.map((c, idx) => (
+              <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  value={c.name}
+                  onChange={e => update(idx, "name", e.target.value)}
+                  placeholder="Prénom"
+                  style={{
+                    flex: 2, padding: "12px 14px", fontSize: 16, borderRadius: 12,
+                    border: "2px solid #c4b5fd", fontFamily: "'Nunito', sans-serif", outline: "none",
+                  }}
+                />
+                <input
+                  value={c.age}
+                  onChange={e => update(idx, "age", e.target.value)}
+                  placeholder="Âge"
+                  type="number"
+                  style={{
+                    flex: 1, padding: "12px 10px", fontSize: 16, borderRadius: 12,
+                    border: "2px solid #c4b5fd", fontFamily: "'Nunito', sans-serif", outline: "none",
+                    textAlign: "center",
+                  }}
+                />
+                {children.length > 1 && (
+                  <button onClick={() => removeChild(idx)} style={{
+                    width: 36, height: 36, borderRadius: "50%", border: "none",
+                    background: "#FEE2E2", color: "#EF4444", fontSize: 18,
+                    cursor: "pointer", fontWeight: 700,
+                  }}>✕</button>
+                )}
+              </div>
+            ))}
+          </div>
+          <button onClick={addChild} style={{
+            background: "none", border: "none", color: "#7c3aed",
+            fontSize: 16, fontWeight: 700, cursor: "pointer",
+            fontFamily: "'Nunito', sans-serif",
+          }}>+ Ajouter un enfant</button>
+          <BigButton onClick={save} color="#7c3aed" bg="#ede9fe"
+            disabled={!children.some(c => c.name.trim() && c.age)}>
+            C'est parti ! 🚀
+          </BigButton>
+        </div>
+      );
+    };
+
+    // ─── WELCOME ───
+
+    const WelcomeScreen = ({ children: childrenList, onSelect, onEditChildren }) => {
+      useEffect(() => {
+        speakNatural("Bonjour ! Je suis Trinité, ta fée savante. Qui es-tu aujourd'hui ?");
+        return () => stopSpeaking();
+      }, []);
+
+      const colors = ["#EC4899", "#3B82F6", "#F59E0B", "#22C55E", "#8B5CF6", "#EF4444"];
+      const bgs = ["#FCE7F3", "#DBEAFE", "#FEF3C7", "#DCFCE7", "#EDE9FE", "#FEE2E2"];
+      const emojis = ["👧", "👦", "🧒", "👶", "🧒", "👦"];
+
+      return (
+        <div style={{
+          display: "flex", flexDirection: "column", alignItems: "center",
+          justifyContent: "center", height: "100%", gap: 28, padding: "24px 20px",
+          overflowY: "auto", WebkitOverflowScrolling: "touch",
+        }}>
+          <LunaAvatar size={100} />
+          <h1 style={{ fontSize: 32, fontWeight: 800, color: "#4c1d95", fontFamily: "'Baloo 2', cursive", textAlign: "center" }}>
+            Bonjour ! Je suis Trinité 🧚
+          </h1>
+          <p style={{ fontSize: 22, color: "#6b21a8", textAlign: "center" }}>Qui es-tu aujourd'hui ?</p>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", justifyContent: "center" }}>
+            {childrenList.map((c, idx) => {
+              const col = colors[idx % colors.length];
+              const bg = bgs[idx % bgs.length];
+              const em = emojis[idx % emojis.length];
+              return (
+                <button key={c.name}
+                  onClick={() => { stopSpeaking(); speakNatural(`Bonjour ${c.name} ! C'est parti !`); onSelect(c); }}
+                  style={{
+                    display: "flex", flexDirection: "column", alignItems: "center",
+                    gap: 8, padding: "22px 40px", borderRadius: 24,
+                    border: `4px solid ${col}`, background: bg,
+                    cursor: "pointer", WebkitTapHighlightColor: "transparent",
+                  }}
+                >
+                  <span style={{ fontSize: 64 }}>{em}</span>
+                  <span style={{ fontSize: 26, fontWeight: 800, color: col, fontFamily: "'Baloo 2', cursive" }}>{c.name}</span>
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={onEditChildren} style={{
+            background: "none", border: "none", color: "#7c3aed",
+            fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "'Nunito', sans-serif",
+            marginTop: 8,
+          }}>⚙️ Modifier les enfants</button>
+        </div>
+      );
+    };
+
+    // ─── THEME SELECT ───
+
+    const ThemeScreen = ({ child, onSelect }) => {
+      useEffect(() => {
+        speakNatural(`${child.name}, choisis ce que tu veux apprendre aujourd'hui !`);
+        return () => stopSpeaking();
+      }, []);
+
+      return (
+        <div style={{
+          display: "flex", flexDirection: "column", alignItems: "center",
+          padding: "20px 16px", gap: 20, height: "100%", overflowY: "auto",
+          WebkitOverflowScrolling: "touch",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <LunaAvatar size={48} />
+            <h2 style={{ fontSize: 24, fontWeight: 800, color: "#4c1d95", fontFamily: "'Baloo 2', cursive" }}>
+              {child.name}, que veux-tu apprendre ?
+            </h2>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, width: "100%", maxWidth: 500 }}>
+            {THEMES.map(t => (
+              <button key={t.id}
+                onClick={() => { stopSpeaking(); speakNatural(t.label); onSelect(t); }}
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center",
+                  gap: 6, padding: "18px 10px", borderRadius: 20,
+                  border: `3px solid ${t.color}`, background: t.bg,
+                  cursor: "pointer", WebkitTapHighlightColor: "transparent",
+                }}
+              >
+                <span style={{ fontSize: 48 }}>{t.emoji}</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: t.color, fontFamily: "'Baloo 2', cursive", textAlign: "center" }}>{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    // ─── LESSON SCREEN ───
+
+    const LessonScreen = ({ child, theme, password, onDone }) => {
+      const [lesson, setLesson] = useState("");
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(false);
+      const [questions, setQuestions] = useState([]);
+      const [chat, setChat] = useState([]);
+      const [phase, setPhase] = useState("lesson");
+      const [quizIndex, setQuizIndex] = useState(0);
+      const [score, setScore] = useState(0);
+      const [answered, setAnswered] = useState(false);
+      const [selectedAnswer, setSelectedAnswer] = useState(null);
+      const [isSpeaking, setIsSpeaking] = useState(false);
+      const [waitingAnswer, setWaitingAnswer] = useState(false);
+      const [textInput, setTextInput] = useState("");
+      const chatEndRef = useRef(null);
+      const lessonRef = useRef("");
+      const { listening, transcript, startListening, stopListening, setTranscript, available: micAvailable } = useSpeechRecognition();
+      const scrollToBottom = () => chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+
+      const age = parseInt(child.age) || 6;
+
+      const getSystemPrompt = (purpose) => {
+        const base = `Tu es Trinité, une fée savante et bienveillante. Tu parles à ${child.name}, ${age} ans. Adapte ton vocabulaire et la complexité à cet âge. N'utilise JAMAIS d'émojis car le texte sera lu à voix haute.`;
+        if (purpose === "lesson") {
+          const themeExtra = theme.id === "german"
+            ? "La leçon doit enseigner du vocabulaire allemand de base avec prononciation phonétique entre parenthèses."
+            : theme.id === "howthingswork"
+            ? "La leçon doit expliquer comment fonctionne un objet du quotidien choisi par toi."
+            : "";
+          return `${base} Écris de façon naturelle et chaleureuse, comme si tu racontais une histoire. Phrases courtes, comparaisons concrètes. Ajoute des respirations narratives. Commence par le prénom de l'enfant. Termine par "C'est la fin de la leçon !". Ne pose PAS de question. ${themeExtra}`;
+        }
+        if (purpose === "qa") return `${base} Réponse courte (2-3 phrases), simple, chaleureuse. Basée sur la leçon : ${lessonRef.current}`;
+        if (purpose === "quiz") return `Tu génères un quiz pour ${child.name}, ${age} ans. Réponds UNIQUEMENT en JSON valide, sans markdown ni backticks. Format: [{"question":"...","options":["A","B","C"],"correct":0,"explanation":"..."}] avec 3 questions. Exactement 3 options chacune, courtes, sans émoji. "correct" = index 0-2.`;
+      };
+
+      const fetchLesson = useCallback(async () => {
+        setLoading(true); setError(false);
+        const text = await callClaude(
+          [{ role: "user", content: `Fais une leçon passionnante sur "${theme.label}" pour un enfant de ${age} ans. Thème : ${theme.id}. Vivant et amusant !` }],
+          getSystemPrompt("lesson"), password
+        );
+        if (!text) { setLoading(false); setError(true); return; }
+        setLesson(text); lessonRef.current = text;
+        setLoading(false); setError(false);
+        setIsSpeaking(true);
+        speakNatural(text, () => setIsSpeaking(false));
+      }, [child, theme, password]);
+
+      useEffect(() => { fetchLesson(); return () => stopSpeaking(); }, []);
+
+      useEffect(() => {
+        if (phase === "quiz" && questions.length === 0) {
+          (async () => {
+            const raw = await callClaude(
+              [{ role: "user", content: `Voici la leçon :\n${lessonRef.current}\n\nGénère 3 questions de quiz.` }],
+              getSystemPrompt("quiz"), password
+            );
+            if (!raw) { setQuestions([{ question: "As-tu aimé la leçon ?", options: ["Oui", "Beaucoup", "Super"], correct: 0, explanation: "Tant mieux !" }]); return; }
+            try { setQuestions(JSON.parse(raw.replace(/```json|```/g, "").trim())); }
+            catch(e) { setQuestions([{ question: "As-tu aimé la leçon ?", options: ["Oui", "Beaucoup", "Super"], correct: 0, explanation: "Tant mieux !" }]); }
+          })();
+        }
+      }, [phase]);
+
+      useEffect(() => {
+        if (phase === "quiz" && questions[quizIndex] && !answered) {
+          const q = questions[quizIndex];
+          const narration = `${q.question}. ` + q.options.map((o, i) => `Le rond ${QUIZ_COLORS[i].label}, ${o}`).join(". ") + ". Appuie sur le rond de ta réponse !";
+          setIsSpeaking(true);
+          speakNatural(narration, () => setIsSpeaking(false));
+        }
+      }, [phase, quizIndex, questions.length]);
+
+      useEffect(() => {
+        if (transcript && phase === "qa") { handleChildQuestion(transcript); setTranscript(""); }
+      }, [transcript]);
+
+      const handleChildQuestion = async (text) => {
+        if (!text.trim()) return;
+        setChat(prev => [...prev, { role: "child", text: text.trim() }]);
+        setWaitingAnswer(true);
+        const answer = await callClaude([{ role: "user", content: text.trim() }], getSystemPrompt("qa"), password);
+        const finalAnswer = answer || "Hmm, je n'ai pas réussi. Essaie de me reposer la question !";
+        setChat(prev => [...prev, { role: "luna", text: finalAnswer }]);
+        setWaitingAnswer(false);
+        setIsSpeaking(true);
+        speakNatural(finalAnswer, () => setIsSpeaking(false));
+      };
+
+      const submitText = () => { if (!textInput.trim()) return; handleChildQuestion(textInput.trim()); setTextInput(""); };
+
+      const handleQuizAnswer = (idx) => {
+        if (answered) return;
+        stopSpeaking(); setAnswered(true); setSelectedAnswer(idx);
+        const q = questions[quizIndex];
+        if (idx === q.correct) { setScore(s => s + 1); speakNatural("Bravo, c'est la bonne réponse !"); }
+        else { speakNatural(`Pas tout à fait. ${q.explanation}. Mais c'est pas grave !`); }
+      };
+
+      const nextQuizQuestion = () => {
+        stopSpeaking();
+        if (quizIndex + 1 < questions.length) { setQuizIndex(i => i + 1); setAnswered(false); setSelectedAnswer(null); }
+        else { setPhase("results"); speakNatural(score >= questions.length - 1 ? `Félicitations ${child.name} !` : `Bien joué ${child.name} !`); }
+      };
+
+      useEffect(scrollToBottom, [chat, phase, quizIndex, waitingAnswer]);
+
+      if (loading || error) return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 20, padding: 30 }}>
+          <LunaAvatar size={100} />
+          {error ? (<>
+            <p style={{ fontSize: 20, color: "#6b21a8", fontFamily: "'Baloo 2', cursive", textAlign: "center" }}>Trinité n'arrive pas à se connecter...</p>
+            <BigButton onClick={fetchLesson} color="#7c3aed" bg="#ede9fe">Réessayer 🔄</BigButton>
+            <BigButton onClick={onDone} color="#9ca3af" bg="#f3f4f6" style={{ fontSize: 16, padding: "12px 20px" }}>← Retour</BigButton>
+          </>) : (<>
+            <p style={{ fontSize: 22, color: "#6b21a8", fontFamily: "'Baloo 2', cursive" }}>Trinité prépare ta leçon...</p>
+            <LoadingDots />
+          </>)}
+        </div>
+      );
+
+      return (
+        <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "2px solid #ede9fe", background: "#faf5ff" }}>
+            <span style={{ fontSize: 30 }}>{theme.emoji}</span>
+            <span style={{ fontSize: 20, fontWeight: 800, color: theme.color, fontFamily: "'Baloo 2', cursive" }}>{theme.label}</span>
+            <span style={{ marginLeft: "auto", fontSize: 14, color: "#7c3aed", fontWeight: 600 }}>
+              {phase === "lesson" ? "📖 Leçon" : phase === "qa" ? "❓ Questions" : phase === "quiz" ? "🧩 Quiz" : "🏆 Résultat"}
+            </span>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 10px", WebkitOverflowScrolling: "touch" }}>
+
+            {phase === "lesson" && (<>
+              <ChatBubble text={lesson} isLuna />
+              <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
+                {isSpeaking
+                  ? <BigButton onClick={() => { stopSpeaking(); setIsSpeaking(false); }} color="#EF4444" bg="#FEE2E2">Pause ⏸️</BigButton>
+                  : <BigButton onClick={() => { setIsSpeaking(true); speakNatural(lesson, () => setIsSpeaking(false)); }} color="#7c3aed" bg="#ede9fe">Réécouter 🔊</BigButton>
+                }
+                <BigButton onClick={() => { stopSpeaking(); setIsSpeaking(false); setPhase("qa"); speakNatural("Est-ce que tu as des questions ?"); }} color="#22c55e" bg="#dcfce7">J'ai compris ! ✅</BigButton>
+              </div>
+            </>)}
+
+            {phase === "qa" && (<>
+              <ChatBubble text={`${child.name}, est-ce que tu as des questions ?`} isLuna />
+              <p style={{ textAlign: "center", color: "#7c3aed", fontSize: 15, margin: "2px 0 12px" }}>
+                {micAvailable ? "Appuie sur le micro ou tape ta question !" : "Tape ta question en bas !"}
+              </p>
+              {chat.map((msg, i) => <ChatBubble key={i} text={msg.text} isLuna={msg.role === "luna"} />)}
+              {waitingAnswer && <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}><LunaAvatar size={44} /><LoadingDots /></div>}
+              <div ref={chatEndRef} />
+            </>)}
+
+            {phase === "quiz" && (<>
+              <ChatBubble text={`Question ${quizIndex + 1} sur ${questions.length}`} isLuna />
+              {questions[quizIndex] ? (
+                <div style={{ padding: "8px 0" }}>
+                  <div style={{ background: "#faf5ff", borderRadius: 18, padding: 20, marginBottom: 16, border: "2px solid #ede9fe" }}>
+                    <p style={{ fontSize: 20, fontWeight: 700, color: "#4c1d95" }}>{questions[quizIndex].question}</p>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    {questions[quizIndex].options.map((opt, idx) => {
+                      const qc = QUIZ_COLORS[idx];
+                      const isCorrect = idx === questions[quizIndex].correct;
+                      const isSelected = idx === selectedAnswer;
+                      let circleBg = qc.color, cardBg = qc.bg, cardBorder = qc.border, extra = {};
+                      if (answered) {
+                        if (isCorrect) { circleBg = "#16A34A"; cardBg = "#BBF7D0"; cardBorder = "#16A34A"; }
+                        else if (isSelected) { circleBg = "#DC2626"; cardBg = "#FECACA"; cardBorder = "#DC2626"; extra = { opacity: 0.8 }; }
+                        else { extra = { opacity: 0.4 }; }
+                      }
+                      return (
+                        <button key={idx} onClick={() => handleQuizAnswer(idx)} disabled={answered} style={{
+                          display: "flex", alignItems: "center", gap: 16, padding: "16px 20px", borderRadius: 18,
+                          border: `3px solid ${cardBorder}`, background: cardBg, cursor: answered ? "default" : "pointer",
+                          fontFamily: "'Nunito', sans-serif", WebkitTapHighlightColor: "transparent", transition: "all 0.2s", ...extra,
+                        }}>
+                          <div style={{ width: 48, height: 48, borderRadius: "50%", background: circleBg, flexShrink: 0,
+                            display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 2px 8px ${circleBg}44` }}>
+                            {answered && isCorrect && <span style={{ fontSize: 24, color: "white" }}>✓</span>}
+                            {answered && isSelected && !isCorrect && <span style={{ fontSize: 24, color: "white" }}>✗</span>}
+                          </div>
+                          <span style={{ fontSize: 20, fontWeight: 700, color: "#1e1b4b" }}>{opt}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{ textAlign: "center", marginTop: 12 }}>
+                    <button onClick={() => {
+                      const q = questions[quizIndex];
+                      speakNatural(`${q.question}. ` + q.options.map((o, i) => `Le rond ${QUIZ_COLORS[i].label}, ${o}`).join(". "));
+                    }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#7c3aed", fontWeight: 600, fontFamily: "'Nunito', sans-serif" }}>🔊 Réécouter</button>
+                  </div>
+                  {answered && (
+                    <div style={{ marginTop: 16, textAlign: "center" }}>
+                      <p style={{ fontSize: 18, color: "#6b21a8", marginBottom: 12, fontWeight: 600 }}>
+                        {selectedAnswer === questions[quizIndex].correct ? "🎉 Bravo !" : questions[quizIndex].explanation}
+                      </p>
+                      <BigButton onClick={nextQuizQuestion} color="#7c3aed" bg="#ede9fe">
+                        {quizIndex + 1 < questions.length ? "Suivante ➡️" : "Résultats 🏆"}
+                      </BigButton>
+                    </div>
+                  )}
+                </div>
+              ) : <LoadingDots />}
+            </>)}
+
+            {phase === "results" && (
+              <ResultsScreen child={child} theme={theme} score={score}
+                total={questions.length} lesson={lessonRef.current}
+                questions={questions} onRestart={onDone} />
+            )}
+          </div>
+
+          {phase === "qa" && (
+            <div style={{ padding: "12px 14px", borderTop: "2px solid #ede9fe", background: "#faf5ff", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+              {listening && <div style={{ color: "#EF4444", fontWeight: 700, fontSize: 18, animation: "fadeIn 0.3s ease" }}>Je t'écoute... 👂</div>}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
+                {micAvailable && <MicButton listening={listening} onPress={listening ? stopListening : startListening} size={56} />}
+                <input value={textInput} onChange={e => setTextInput(e.target.value)} onKeyDown={e => e.key === "Enter" && submitText()}
+                  placeholder="Tape la question ici..." style={{
+                    flex: 1, padding: "12px 16px", fontSize: 16, borderRadius: 14,
+                    border: "2px solid #c4b5fd", fontFamily: "'Nunito', sans-serif", outline: "none",
+                  }} />
+                <button onClick={submitText} style={{ width: 48, height: 48, borderRadius: "50%", background: "#7c3aed", border: "none", color: "white", fontSize: 22, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>➤</button>
+              </div>
+              <BigButton onClick={() => { stopSpeaking(); setPhase("quiz"); speakNatural("C'est l'heure du quiz !"); }}
+                color="#22c55e" bg="#dcfce7" style={{ padding: "12px 24px", fontSize: 18, width: "100%" }}>Passer au quiz ! 🧩</BigButton>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // ─── RESULTS ───
+
+    const ResultsScreen = ({ child, theme, score, total, lesson, questions, onRestart }) => {
+      const stars = score === total ? "⭐⭐⭐" : score >= total - 1 ? "⭐⭐" : "⭐";
+      return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 20, padding: "16px 10px" }}>
+          <LunaAvatar size={80} />
+          <h2 style={{ fontSize: 28, fontWeight: 800, color: "#4c1d95", fontFamily: "'Baloo 2', cursive", textAlign: "center" }}>
+            {score >= total - 1 ? `Bravo ${child.name} !` : `Bien joué ${child.name} !`}
+          </h2>
+          <div style={{ background: "#faf5ff", borderRadius: 22, padding: "24px 32px", textAlign: "center", border: "3px solid #c4b5fd" }}>
+            <p style={{ fontSize: 48, marginBottom: 6 }}>{stars}</p>
+            <p style={{ fontSize: 26, fontWeight: 800, color: "#6b21a8" }}>{score} / {total}</p>
+            <p style={{ fontSize: 16, color: "#7c3aed" }}>bonnes réponses</p>
+          </div>
+          <BigButton onClick={onRestart} color="#0ea5e9" bg="#e0f2fe">Nouvelle leçon 🔄</BigButton>
+        </div>
+      );
+    };
+
+    // ─── MAIN APP ───
+
+    const App = () => {
+      const [password, setPassword] = useState(getStored("trinite_pw") || "");
+      const [authenticated, setAuthenticated] = useState(!!getStored("trinite_pw"));
+      const [childrenList, setChildrenList] = useState(() => {
+        const s = getStored("trinite_children");
+        return s ? JSON.parse(s) : null;
+      });
+      const [screen, setScreen] = useState("welcome");
+      const [child, setChild] = useState(null);
+      const [theme, setTheme] = useState(null);
+
+      useEffect(() => {
+        if ("speechSynthesis" in window) {
+          window.speechSynthesis.getVoices();
+          window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+        }
+      }, []);
+
+      const reset = () => { stopSpeaking(); setScreen("welcome"); setChild(null); setTheme(null); };
+
+      if (!authenticated) return <PasswordScreen onSuccess={(pw) => { setPassword(pw); setAuthenticated(true); }} />;
+      if (!childrenList) return <SetupScreen onDone={(c) => setChildrenList(c)} />;
+
+      return (
+        <div style={{
+          width: "100%", height: "100vh", maxHeight: "-webkit-fill-available",
+          background: "linear-gradient(180deg, #f5f3ff 0%, #ede9fe 50%, #e0d4fc 100%)",
+          fontFamily: "'Nunito', sans-serif",
+          display: "flex", flexDirection: "column", overflow: "hidden",
+        }}>
+          {screen !== "welcome" && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px", background: "#7c3aed", flexShrink: 0 }}>
+              <button onClick={reset} style={{ background: "none", border: "none", color: "white", fontSize: 16, cursor: "pointer", fontWeight: 700, fontFamily: "'Nunito', sans-serif" }}>← Accueil</button>
+              <span style={{ color: "white", fontSize: 16, fontWeight: 700 }}>🧚 Trinité — {child?.name}</span>
+            </div>
+          )}
+          <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            {screen === "welcome" && <WelcomeScreen children={childrenList} onSelect={c => { setChild(c); setScreen("theme"); }} onEditChildren={() => setChildrenList(null)} />}
+            {screen === "theme" && <ThemeScreen child={child} onSelect={t => { setTheme(t); setScreen("lesson"); }} />}
+            {screen === "lesson" && <LessonScreen child={child} theme={theme} password={password} onDone={reset} />}
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
