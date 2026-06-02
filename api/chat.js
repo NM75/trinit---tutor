@@ -7,16 +7,15 @@ const ALLOWED_ORIGINS = [
   "https://www.trinitelafee.fr",
 ];
 
-// Renvoie l'origine si elle est autorisée (liste blanche, Previews Vercel,
-// ou localhost pour le dev), sinon null. Le header CORS n'accepte qu'une valeur,
-// d'où le renvoi de l'origine entrante exacte.
+// Renvoie l'origine si elle est autorisée (liste blanche ou Previews Vercel),
+// sinon null. Le header CORS n'accepte qu'une valeur, d'où le renvoi de
+// l'origine entrante exacte.
 function resolveOrigin(origin) {
   if (!origin) return null;
   if (ALLOWED_ORIGINS.includes(origin)) return origin;
   try {
     const { hostname, protocol } = new URL(origin);
     if (protocol === "https:" && hostname.endsWith(".vercel.app")) return origin; // Previews
-    if (hostname === "localhost" || hostname === "127.0.0.1") return origin;       // Dev local
   } catch (e) {}
   return null;
 }
