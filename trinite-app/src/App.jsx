@@ -71,7 +71,7 @@ const MainApp = () => {
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         {screen === "welcome" && <WelcomeScreen childrenList={childrenList} onSelect={(c) => { setChild(c); setScreen("theme"); }} onEditChildren={() => setChildrenList(null)} />}
         {screen === "theme" && <ThemeScreen child={child} onSelect={(t) => { setTheme(t); setScreen("lesson"); }} />}
-        {screen === "lesson" && <LessonScreen child={child} theme={theme} password="" onDone={reset} />}
+        {screen === "lesson" && <LessonScreen child={child} theme={theme} onDone={reset} />}
       </div>
     </div>
   );

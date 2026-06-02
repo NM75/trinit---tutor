@@ -1,5 +1,6 @@
 // Écran principal : leçon (avec TTS) + questions/réponses + quiz.
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useAuth } from "@clerk/clerk-react";
 import { LunaAvatar, BigButton, ChatBubble, LoadingDots, MicButton } from "../ui";
 import { ResultsScreen } from "./Results";
 import { QUIZ_COLORS } from "../../lib/themes";
@@ -8,7 +9,8 @@ import { callClaude } from "../../lib/api";
 import { speakNatural, stopSpeaking } from "../../lib/tts";
 import { useSpeechRecognition } from "../../lib/speech";
 
-export const LessonScreen = ({ child, theme, password, onDone }) => {
+export const LessonScreen = ({ child, theme, onDone }) => {
+  const { getToken } = useAuth();
   const [lesson, setLesson] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -31,14 +33,14 @@ export const LessonScreen = ({ child, theme, password, onDone }) => {
     setLoading(true); setError(false);
     const text = await callClaude(
       [{ role: "user", content: `Fais une leçon passionnante sur "${theme.label}" pour un enfant de ${child.age} ans. Thème : ${theme.id}. Vivant et amusant !` }],
-      lessonPrompt(child, theme), password
+      lessonPrompt(child, theme), getToken
     );
     if (!text) { setLoading(false); setError(true); return; }
     setLesson(text); lessonRef.current = text;
     setLoading(false); setError(false);
     setIsSpeaking(true);
     speakNatural(text, () => setIsSpeaking(false));
-  }, [child, theme, password]);
+  }, [child, theme, getToken]);
 
   useEffect(() => { fetchLesson(); return () => stopSpeaking(); }, []);
 
@@ -47,7 +49,7 @@ export const LessonScreen = ({ child, theme, password, onDone }) => {
       (async () => {
         const raw = await callClaude(
           [{ role: "user", content: `Voici la leçon :\n${lessonRef.current}\n\nGénère 3 questions de quiz.` }],
-          quizPrompt(child), password
+          quizPrompt(child), getToken
         );
         if (!raw) { setQuestions([{ question: "As-tu aimé la leçon ?", options: ["Oui", "Beaucoup", "Super"], correct: 0, explanation: "Tant mieux !" }]); return; }
         try { setQuestions(JSON.parse(raw.replace(/```json|```/g, "").trim())); }
@@ -73,7 +75,7 @@ export const LessonScreen = ({ child, theme, password, onDone }) => {
     if (!text.trim()) return;
     setChat((prev) => [...prev, { role: "child", text: text.trim() }]);
     setWaitingAnswer(true);
-    const answer = await callClaude([{ role: "user", content: text.trim() }], qaPrompt(child, lessonRef.current), password);
+    const answer = await callClaude([{ role: "user", content: text.trim() }], qaPrompt(child, lessonRef.current), getToken);
     const finalAnswer = answer || "Hmm, je n'ai pas réussi. Essaie de me reposer la question !";
     setChat((prev) => [...prev, { role: "luna", text: finalAnswer }]);
     setWaitingAnswer(false);

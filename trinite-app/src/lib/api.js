@@ -1,20 +1,26 @@
 // Appel à Claude via le proxy serverless (/api/chat).
-// Gère les retries et le timeout. Le password sera remplacé par Clerk en Phase 2.
+// Authentifie chaque requête avec le token de session Clerk (getToken).
+// Gère les retries et le timeout.
 
-export const callClaude = async (messages, system, password, retries = 2) => {
+export const callClaude = async (messages, system, getToken, retries = 2) => {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      const token = await getToken();
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000);
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password, messages, system }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ messages, system }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
       if (!res.ok) {
-        if (res.status === 401) return "__WRONG_PASSWORD__";
+        // Session absente/invalide : inutile de réessayer, on laisse l'écran d'erreur s'afficher.
+        if (res.status === 401) return null;
         if (attempt < retries) { await new Promise((r) => setTimeout(r, 1500)); continue; }
         throw new Error(`API ${res.status}`);
       }

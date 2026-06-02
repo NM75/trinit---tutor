@@ -1,17 +1,58 @@
+import { verifyToken } from "@clerk/backend";
+
+// Origines de confiance (production + app Vercel).
+const ALLOWED_ORIGINS = [
+  "https://trinit-tutor.vercel.app",
+  "https://trinitelafee.fr",
+  "https://www.trinitelafee.fr",
+];
+
+// Renvoie l'origine si elle est autorisée (liste blanche, Previews Vercel,
+// ou localhost pour le dev), sinon null. Le header CORS n'accepte qu'une valeur,
+// d'où le renvoi de l'origine entrante exacte.
+function resolveOrigin(origin) {
+  if (!origin) return null;
+  if (ALLOWED_ORIGINS.includes(origin)) return origin;
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol === "https:" && hostname.endsWith(".vercel.app")) return origin; // Previews
+    if (hostname === "localhost" || hostname === "127.0.0.1") return origin;       // Dev local
+  } catch (e) {}
+  return null;
+}
+
 export default async function handler(req, res) {
   // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const origin = resolveOrigin(req.headers.origin);
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const { password, messages, system } = req.body;
+  // Auth Clerk : token de session via header Authorization: Bearer <token>
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "Non authentifié" });
 
-  // Check password
-  if (password !== process.env.APP_PASSWORD) {
-    return res.status(401).json({ error: "Mot de passe incorrect" });
+  // azp doit correspondre à une origine de confiance (+ l'origine résolue le cas échéant).
+  const authorizedParties = [...ALLOWED_ORIGINS];
+  if (origin && !authorizedParties.includes(origin)) authorizedParties.push(origin);
+
+  try {
+    await verifyToken(token, {
+      secretKey: process.env.CLERK_SECRET_KEY,
+      authorizedParties,
+    });
+  } catch (e) {
+    return res.status(401).json({ error: "Session invalide" });
   }
+
+  const { messages, system } = req.body;
 
   // Forward to Anthropic
   try {
