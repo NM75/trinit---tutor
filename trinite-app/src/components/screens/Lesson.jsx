@@ -6,11 +6,14 @@ import { ResultsScreen } from "./Results";
 import { QUIZ_COLORS } from "../../lib/themes";
 import { lessonPrompt, qaPrompt, quizPrompt } from "../../lib/prompts";
 import { callClaude } from "../../lib/api";
+import { useSupabase } from "../../lib/supabase";
+import { recordLesson, markThemeSeen } from "../../lib/db";
 import { speakNatural, stopSpeaking } from "../../lib/tts";
 import { useSpeechRecognition } from "../../lib/speech";
 
 export const LessonScreen = ({ child, theme, onDone }) => {
   const { getToken } = useAuth();
+  const sb = useSupabase();
   const [lesson, setLesson] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -38,9 +41,11 @@ export const LessonScreen = ({ child, theme, onDone }) => {
     if (!text) { setLoading(false); setError(true); return; }
     setLesson(text); lessonRef.current = text;
     setLoading(false); setError(false);
+    // Thème marqué « vu » dès que la leçon s'affiche (best-effort, non bloquant).
+    if (child.id) markThemeSeen(sb, { childId: child.id, themeId: theme.id }).catch(() => {});
     setIsSpeaking(true);
     speakNatural(text, () => setIsSpeaking(false));
-  }, [child, theme, getToken]);
+  }, [child, theme, getToken, sb]);
 
   useEffect(() => { fetchLesson(); return () => stopSpeaking(); }, []);
 
@@ -96,7 +101,12 @@ export const LessonScreen = ({ child, theme, onDone }) => {
   const nextQuizQuestion = () => {
     stopSpeaking();
     if (quizIndex + 1 < questions.length) { setQuizIndex((i) => i + 1); setAnswered(false); setSelectedAnswer(null); }
-    else { setPhase("results"); speakNatural(score >= questions.length - 1 ? `Félicitations ${child.name} !` : `Bien joué ${child.name} !`); }
+    else {
+      setPhase("results");
+      speakNatural(score >= questions.length - 1 ? `Félicitations ${child.name} !` : `Bien joué ${child.name} !`);
+      // Enregistre le résultat (best-effort, ne bloque pas l'écran de résultats).
+      if (child.id) recordLesson(sb, { childId: child.id, theme, score, total: questions.length }).catch(() => {});
+    }
   };
 
   useEffect(scrollToBottom, [chat, phase, quizIndex, waitingAnswer]);

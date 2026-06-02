@@ -30,7 +30,7 @@ export const WelcomeScreen = ({ childrenList, onSelect, onEditChildren }) => {
           const bg = bgs[idx % bgs.length];
           const em = emojis[idx % emojis.length];
           return (
-            <button key={c.name}
+            <button key={c.id ?? c.name}
               onClick={() => { stopSpeaking(); speakNatural(`Bonjour ${c.name} ! C'est parti !`); onSelect(c); }}
               style={{
                 display: "flex", flexDirection: "column", alignItems: "center",
