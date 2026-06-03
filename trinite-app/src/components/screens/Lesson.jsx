@@ -17,6 +17,7 @@ export const LessonScreen = ({ child, theme, onDone }) => {
   const [lesson, setLesson] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [quota, setQuota] = useState(null); // { plan, limit } si le quota hebdo est atteint
   const [questions, setQuestions] = useState([]);
   const [chat, setChat] = useState([]);
   const [phase, setPhase] = useState("lesson");
@@ -33,11 +34,14 @@ export const LessonScreen = ({ child, theme, onDone }) => {
   const scrollToBottom = () => chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
 
   const fetchLesson = useCallback(async () => {
-    setLoading(true); setError(false);
-    const text = await callClaude(
+    setLoading(true); setError(false); setQuota(null);
+    const res = await callClaude(
       [{ role: "user", content: `Fais une leçon passionnante sur "${theme.label}" pour un enfant de ${child.age} ans. Thème : ${theme.id}. Vivant et amusant !` }],
-      lessonPrompt(child, theme), getToken
+      lessonPrompt(child, theme), getToken, { kind: "lesson" }
     );
+    // Quota hebdo atteint : écran dédié, pas une erreur technique.
+    if (res && res.quota) { setQuota(res); setLoading(false); return; }
+    const text = res;
     if (!text) { setLoading(false); setError(true); return; }
     setLesson(text); lessonRef.current = text;
     setLoading(false); setError(false);
@@ -110,6 +114,24 @@ export const LessonScreen = ({ child, theme, onDone }) => {
   };
 
   useEffect(scrollToBottom, [chat, phase, quizIndex, waitingAnswer]);
+
+  if (quota) {
+    const isPremium = quota.plan === "premium";
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 18, padding: 30 }}>
+        <LunaAvatar size={100} />
+        <p style={{ fontSize: 22, color: "#6b21a8", fontFamily: "'Baloo 2', cursive", textAlign: "center" }}>
+          Tu as fait tes {quota.limit} leçons de la semaine ! 🎉
+        </p>
+        <p style={{ fontSize: 17, color: "#7c3aed", textAlign: "center", maxWidth: 320, lineHeight: 1.5 }}>
+          {isPremium
+            ? "Reviens lundi pour de nouvelles aventures 🌙"
+            : "Reviens lundi 🌙 ou passe en Premium pour 15 leçons par semaine !"}
+        </p>
+        <BigButton onClick={onDone} color="#7c3aed" bg="#ede9fe">← Retour à l'accueil</BigButton>
+      </div>
+    );
+  }
 
   if (loading || error) return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 20, padding: 30 }}>
