@@ -5,7 +5,7 @@ import { LunaAvatar, BigButton, ChatBubble, LoadingDots, MicButton } from "../ui
 import { ResultsScreen } from "./Results";
 import { QUIZ_COLORS } from "../../lib/themes";
 import { lessonPrompt, qaPrompt, quizPrompt } from "../../lib/prompts";
-import { callClaude } from "../../lib/api";
+import { callClaude, startCheckout } from "../../lib/api";
 import { useSupabase } from "../../lib/supabase";
 import { recordLesson, markThemeSeen } from "../../lib/db";
 import { speakNatural, stopSpeaking } from "../../lib/tts";
@@ -18,6 +18,7 @@ export const LessonScreen = ({ child, theme, onDone }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [quota, setQuota] = useState(null); // { plan, limit } si le quota hebdo est atteint
+  const [upgrading, setUpgrading] = useState(false); // redirection Stripe en cours
   const [questions, setQuestions] = useState([]);
   const [chat, setChat] = useState([]);
   const [phase, setPhase] = useState("lesson");
@@ -117,6 +118,11 @@ export const LessonScreen = ({ child, theme, onDone }) => {
 
   if (quota) {
     const isPremium = quota.plan === "premium";
+    const onUpgrade = async () => {
+      setUpgrading(true);
+      const ok = await startCheckout(getToken); // succès → redirection Stripe (on ne revient pas)
+      if (!ok) setUpgrading(false);             // échec → on réaffiche le bouton
+    };
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 18, padding: 30 }}>
         <LunaAvatar size={100} />
@@ -128,7 +134,12 @@ export const LessonScreen = ({ child, theme, onDone }) => {
             ? "Reviens lundi pour de nouvelles aventures 🌙"
             : "Reviens lundi 🌙 ou passe en Premium pour 15 leçons par semaine !"}
         </p>
-        <BigButton onClick={onDone} color="#7c3aed" bg="#ede9fe">← Retour à l'accueil</BigButton>
+        {!isPremium && (
+          <BigButton onClick={onUpgrade} color="#7c3aed" bg="#f5d0fe" disabled={upgrading}>
+            {upgrading ? "Redirection…" : "✨ Passer en Premium"}
+          </BigButton>
+        )}
+        <BigButton onClick={onDone} color="#7c3aed" bg="#ede9fe" style={!isPremium ? { fontSize: 16, padding: "12px 20px" } : {}}>← Retour à l'accueil</BigButton>
       </div>
     );
   }

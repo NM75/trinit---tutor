@@ -44,3 +44,26 @@ export const callClaude = async (messages, system, getToken, opts = {}) => {
   }
   return null;
 };
+
+// Lance le tunnel de paiement Stripe (passage en Premium).
+// Crée une session Checkout côté serveur (authentifiée Clerk) puis redirige le
+// navigateur vers Stripe. Retourne false si la création a échoué (on reste sur place).
+export const startCheckout = async (getToken) => {
+  try {
+    const token = await getToken();
+    const res = await fetch("/api/checkout", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) return false;
+    const { url } = await res.json();
+    if (!url) return false;
+    window.location.href = url;
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
